@@ -1,0 +1,24 @@
+# The renderer accepts connections only from the Nabu pods and may not open any: LibreOffice will
+# follow links and fetch linked images or external data when a document asks it to, and an
+# untrusted document must not be able to reach the cluster or the internet through it. Needs a
+# CNI that enforces NetworkPolicy; on one that does not, the policy is inert, so check yours.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nabu-renderer
+  labels:
+    app.kubernetes.io/name: nabu-renderer
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nabu-renderer
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nabu
+      ports:
+        - protocol: TCP
+          port: 3000
+  egress: []

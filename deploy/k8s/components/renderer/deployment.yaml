@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nabu-renderer
+  labels:
+    app.kubernetes.io/name: nabu-renderer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nabu-renderer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nabu-renderer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      # The renderer opens untrusted documents. It does not need the internet to do its job; the
+      # NetworkPolicy in this component denies all egress. Do not give it a route out.
+      automountServiceAccountToken: false
+      containers:
+        - name: renderer
+          # Pinned to the same release as docker-compose.yml. The image runs as uid/gid 1001 with HOME
+          # /home/gotenberg (its upstream Dockerfile), which the securityContext and volumes here match.
+          image: gotenberg/gotenberg:8.37.0
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          # LibreOffice and Chromium write profiles and conversion scratch files; with a read-only
+          # root filesystem those go to memory-backed volumes.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/gotenberg
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}

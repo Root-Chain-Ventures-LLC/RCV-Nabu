@@ -1,0 +1,29 @@
+# Optional document renderer (a Gotenberg-compatible service: LibreOffice behind HTTP). With it,
+# Word, Excel and PowerPoint files get a faithful PDF view and legacy formats (DOC, XLS, PPT, RTF,
+# ODF) can be previewed and searched at all. Without it Nabu falls back to a built-in sanitized
+# HTML view and keeps the legacy formats downloadable only.
+#
+# Add it on top of either shape from your own kustomization:
+#
+#   apiVersion: kustomize.config.k8s.io/v1beta1
+#   kind: Kustomization
+#   resources:
+#     - github.com/<your-fork-or-mirror>/deploy/k8s/overlays/ha   # or a local path to base/ or overlays/ha/
+#   components:
+#     - <path to>/deploy/k8s/components/renderer
+#
+# It adds the renderer Deployment and Service, a NetworkPolicy that lets only Nabu talk to it and
+# gives it no egress at all, and sets RENDERER_URL on the Nabu ConfigMap.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Same namespace as base/, so the renderer lands next to Nabu whatever the including kustomization says.
+namespace: nabu
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+
+patches:
+  - path: configmap-renderer.yaml

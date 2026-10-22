@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: nabu
+
+# secret.example.yaml is deliberately not listed: create the real Secret out of band so no
+# credential ever lives in a repository.
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+
+# The deployment names its image just `nabu`; this is the one place that says where it comes
+# from. It is set to the published image; change the version you are running with:
+#
+#   kustomize edit set image nabu=ghcr.io/root-chain-ventures-llc/nabu:X.Y.Z
+#
+# (run in deploy/k8s/base, or in your own kustomization that uses this one as a base). A
+# digest pin works too: `nabu=ghcr.io/root-chain-ventures-llc/nabu@sha256:<digest>`.
+images:
+  - name: nabu
+    newName: ghcr.io/root-chain-ventures-llc/nabu
+    newTag: "0.2.0"
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: nabu
+      app.kubernetes.io/part-of: nabu

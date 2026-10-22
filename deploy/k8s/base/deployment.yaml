@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nabu
+  labels:
+    app.kubernetes.io/name: nabu
+spec:
+  replicas: 1
+  # One pod on this volume. DATA_DIR (uploaded files and their renditions) is plain files on one
+  # ReadWriteOnce volume with one writer. Migrations are not the blocker: they run on every start
+  # under a Postgres advisory lock, so two pods racing to migrate is already safe, and the
+  # background loops take advisory locks too. Two pods mounting one ReadWriteOnce volume is what
+  # does not work, so use overlays/ha (a ReadWriteMany volume) rather than raising `replicas`
+  # here. `strategy: Recreate` keeps an upgrade from briefly running two pods on the same volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nabu
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nabu
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        # The image's /data is owned by uid 1000 (the image's `node` user); fsGroup makes a
+        # freshly provisioned volume writable by it.
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # The app never talks to the Kubernetes API, so it gets no service-account token: a
+      # compromised process has no credential to the cluster to steal.
+      automountServiceAccountToken: false
+      # Give a running parse time to hand its job back to the queue on shutdown.
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: nabu
+          # The name `nabu` is resolved by the `images:` entry in kustomization.yaml, which holds
+          # the registry and version. Do not put a registry here.
+          image: nabu
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          # DATABASE_URL and NABU_SECRET_KEY belong in the `nabu` Secret (see
+          # secret.example.yaml).
+          envFrom:
+            - configMapRef:
+                name: nabu
+            - secretRef:
+                name: nabu
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          # The app answers plain HTTP only; the ingress in front of it is what is HTTPS.
+          startupProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 3
+            # Generous: migrations run against an empty database on first start, under the
+            # advisory lock, and the HTTP listener does not open until they finish.
+            failureThreshold: 40
+          readinessProbe:
+            httpGet: { path: /api/ready, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              # Parsing runs in this container: up to PARSE_CONCURRENCY (2 by default) worker
+              # threads, each allowed a 768 MB heap plus memory outside the heap (OCR, image
+              # bitmaps), beside the main thread's 512 MB. 3Gi covers the defaults; lower
+              # PARSE_CONCURRENCY or PARSE_WORKER_MAX_HEAP_MB before lowering this. See
+              # deploy/README.md, "OCR and parsing memory".
+              memory: 3Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nabu-data
+        - name: tmp
+          emptyDir: {}

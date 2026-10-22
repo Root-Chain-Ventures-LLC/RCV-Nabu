@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nabu
+data:
+  # In-cluster Service of the renderer. The URL comes from the environment only, never from the UI.
+  RENDERER_URL: "http://nabu-renderer:3000"

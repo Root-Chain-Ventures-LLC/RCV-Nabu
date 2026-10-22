@@ -1,0 +1,147 @@
+# Nabu: the application plus its own Postgres (with pgvector), one host.
+#
+#   ./install.sh                 # recommended: writes .env, pulls, starts, waits for health
+#   docker compose up -d         # by hand, once .env exists (see .env.example)
+#
+# Needs Docker Compose v2.24 or newer (the optional `env_file` form below). The image is
+# public: no registry login is needed. NABU_VERSION in .env pins the version; the default is
+# the latest stable release.
+#
+# Nabu speaks plain HTTP: put a reverse proxy that terminates TLS in front of it, set BASE_URL
+# to the https address people use, and set TRUST_PROXY (see .env.example).
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: nabu-db
+    environment:
+      POSTGRES_USER: nabu
+      POSTGRES_DB: nabu
+      POSTGRES_PASSWORD: ${NABU_DB_PASSWORD:?set NABU_DB_PASSWORD in .env}
+    volumes:
+      - nabu-pg:/var/lib/postgresql/data
+    # Loopback only: the app reaches the database over the compose network (service name `db`),
+    # so nothing needs it published to the LAN. The published loopback port exists for backups and
+    # psql on the same host. A non-default port avoids clashing with a Postgres already on the host.
+    ports:
+      - "127.0.0.1:${NABU_DB_PORT:-5435}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nabu -d nabu"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Hardening: no privilege gain through setuid binaries, and only the capabilities the image's entrypoint needs
+    # (it starts as root, fixes ownership of the data directory, then drops to the postgres user).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    restart: unless-stopped
+
+  app:
+    image: ghcr.io/root-chain-ventures-llc/nabu:${NABU_VERSION:-latest}
+    container_name: nabu-app
+    depends_on:
+      db:
+        condition: service_healthy
+    # Everything in .env reaches the container this way, including NABU_SECRET_KEY (see
+    # .env.example). The image itself contains no secrets.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: 8080
+      HOST: 0.0.0.0
+      # NABU_DB_URL_PARAMS (optional) is appended: ?sslmode=verify-full with DATABASE_CA_FILE turns on TLS to the database.
+      DATABASE_URL: postgres://nabu:${NABU_DB_PASSWORD}@db:5432/nabu${NABU_DB_URL_PARAMS:-}
+      DATA_DIR: /data
+      NABU_SECRET_KEY: ${NABU_SECRET_KEY:?set NABU_SECRET_KEY in .env (openssl rand -base64 32)}
+      # Heap ceiling of the main thread (HTTP, SQL, storage). Each parse runs in its own worker thread with its own
+      # ceiling (PARSE_WORKER_MAX_HEAP_MB, default 768), so a file that blows up a parser fails that one job.
+      NODE_OPTIONS: ${NABU_NODE_OPTIONS:---max-old-space-size=512}
+    # Host interface and port are the operator's choice. The default publishes on loopback only, which is what a
+    # reverse proxy on the same host needs; set NABU_BIND=0.0.0.0 (or a LAN address) to reach the app directly or
+    # from a proxy on another machine. The container always listens on 8080.
+    ports:
+      - "${NABU_BIND:-127.0.0.1}:${NABU_PORT:-8080}:8080"
+    volumes:
+      - nabu-data:/data
+      # Certificates for TLS_CERT_FILE / TLS_KEY_FILE / TLS_CLIENT_CA_FILE / OUTBOUND_CA_FILE / DATABASE_CA_FILE, read-only,
+      # outside the data volume (see "Securing a deployment" in the README):
+      # - ./certs:/certs:ro
+    # `default` reaches the database and the outside world; `renderer-internal` is the private link to the optional
+    # renderer (below), which has no route out.
+    networks:
+      - default
+      - renderer-internal
+    healthcheck:
+      # Scheme-aware: https when TLS_CERT_FILE is set (the probe does not verify the certificate; it is loopback).
+      test: ["CMD", "node", "-e", "const t=!!process.env.TLS_CERT_FILE;require(t?'https':'http').get({host:'127.0.0.1',port:8080,path:'/api/health',rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Hardening: the image's /app is root-owned and the root filesystem is read-only, so a
+    # compromised process cannot rewrite the application; the only writable places are the /data
+    # volume and /tmp.
+    read_only: true
+    tmpfs:
+      # Parsing keeps its working files under DATA_DIR/tmp (the data volume), not here: OCR, pdf.js and the
+      # office parsers need nothing in /tmp beyond what Node itself uses, so 256 MB is plenty.
+      - /tmp:size=256m,mode=1777,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Parsing runs in this container: up to PARSE_CONCURRENCY (default 2) worker threads, each allowed a 768 MB
+    # V8 heap (PARSE_WORKER_MAX_HEAP_MB) plus memory outside the heap (buffers, image bitmaps, OCR), next to the main
+    # thread's 512 MB. Measured peak with four small parses at once was about 740 MB, but the ceilings add up to
+    # 2 x 768 + 512 MB, so the container limit has to sit above that or the kernel's OOM killer would act before
+    # V8's per-worker limit does. 3 GB covers the defaults; lower the worker heap or the concurrency before the limit.
+    mem_limit: ${NABU_MEM_LIMIT:-3g}
+    pids_limit: ${NABU_PIDS_LIMIT:-256}
+    # On `docker stop` the running parses are cancelled and their jobs go straight back to the queue (no attempt is
+    # used up); the next start picks them up. A job cut off by a hard kill is recovered after 15 minutes.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  # Optional document renderer (office documents to PDF for the inline viewer). Off by
+  # default: `docker compose --profile renderer up -d`, then set RENDERER_URL=http://renderer:3000
+  # in .env. No published port: only the app talks to it, over the compose network.
+  #
+  # The renderer opens untrusted documents with LibreOffice, which will follow links and fetch linked images
+  # and external data when a document asks it to. It does not need the internet to do its job, so it sits on
+  # an internal-only network (`renderer-internal`: no gateway, no route out) shared with the app and nothing else.
+  # Keep it that way (and keep it off any network that has egress); on Kubernetes or another orchestrator give
+  # the renderer a deny-all egress policy.
+  renderer:
+    # Pinned to a release (8.37.0 was what the floating `:8` tag pointed at when this was written); bump it
+    # deliberately, with a test of Office conversion, instead of taking whatever `:8` is on the next pull.
+    image: gotenberg/gotenberg:8.37.0
+    container_name: nabu-renderer
+    profiles: ["renderer"]
+    networks:
+      - renderer-internal
+    # Hardening: it opens untrusted documents. No privilege gain, no capabilities; scratch space is a tmpfs so
+    # converted files never reach a disk.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    restart: unless-stopped
+
+networks:
+  default: {}
+  renderer-internal:
+    internal: true
+
+volumes:
+  nabu-data:
+  nabu-pg:

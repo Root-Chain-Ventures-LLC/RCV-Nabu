@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nabu-data
+  labels:
+    app.kubernetes.io/name: nabu
+spec:
+  # ReadWriteOnce on purpose: DATA_DIR holds the uploaded files and their renditions as plain
+  # files on disk, with exactly one pod writing them. overlays/ha switches this to
+  # ReadWriteMany for more than one replica; see deployment.yaml's comment on replicas.
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+  # storageClassName: ""   # uncomment and set if the cluster has no usable default

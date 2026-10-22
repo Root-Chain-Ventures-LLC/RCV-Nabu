@@ -1,0 +1,20 @@
+# The multi-replica choice: `kubectl apply -k deploy/k8s/overlays/ha`. Builds on base/ (same
+# namespace, ConfigMap, Secret contract, Service and Ingress) and patches only what running more
+# than one replica requires. See deploy/k8s/README.md, "Two shapes", for what each patch is for
+# and what the cluster must provide (a ReadWriteMany storage class above all).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Declared here as well as in base/: resources that exist only in this overlay (pdb.yaml) are not
+# covered by base's namespace transformer, and a namespace-less PodDisruptionBudget would land in
+# the caller's current context instead of protecting these pods.
+namespace: nabu
+
+resources:
+  - ../../base
+  - pdb.yaml
+
+patches:
+  - path: deployment-ha.yaml
+  - path: pvc-rwx.yaml
+  - path: configmap-trustproxy.yaml

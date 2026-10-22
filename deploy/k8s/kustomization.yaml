@@ -1,0 +1,8 @@
+# `kubectl apply -k deploy/k8s` (or `kustomize build deploy/k8s`) deploys the single-replica
+# shape: this file is a thin pointer at base/. See base/kustomization.yaml for what that
+# deploys, overlays/ha/ for the multi-replica choice and components/renderer/ for the optional
+# document renderer. README.md in this directory explains all three.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - base

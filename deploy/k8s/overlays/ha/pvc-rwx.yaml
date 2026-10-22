@@ -1,0 +1,24 @@
+# Strategic-merge patch over base/pvc.yaml. The base is ReadWriteOnce because the single-replica
+# shape has exactly one pod writing DATA_DIR. More than one replica means every pod must read and
+# write the same files at once, so the volume itself has to support that:
+#
+#   - Set `storageClassName` to a class that provides ReadWriteMany: NFS (an in-cluster
+#     provisioner or an external NFS server), CephFS (for example Rook's `csi-cephfs`), or Longhorn
+#     with RWX share-manager volumes. A plain ReadWriteOnce class (most default cloud block
+#     storage, most default local-path provisioners) does NOT support this: check
+#     `kubectl get storageclass` and the provisioner's documentation before applying the
+#     overlay, not after a pod fails to schedule.
+#   - accessModes on an existing PersistentVolumeClaim are immutable. Applying this overlay over a
+#     cluster that already ran `base/` fails ("spec is immutable after creation"). Choose the
+#     shape before the first install, or migrate: scale the Deployment to zero, copy /data off
+#     (for example with a throwaway pod mounting the old claim), delete the old claim, apply the
+#     overlay so a new RWX claim is created, copy the data back in, scale up.
+#   - Object storage is a real alternative in principle, but Nabu's storage driver today is the
+#     local filesystem, so RWX is the answer.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nabu-data
+spec:
+  accessModes: [ReadWriteMany]
+  # storageClassName: your-rwx-class

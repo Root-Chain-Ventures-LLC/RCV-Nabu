@@ -1,0 +1,239 @@
+name: publish
+
+# Publishes a Nabu release for users. The image is BUILT in the private source repository,
+# which pushes it to a private staging name and dispatches `publish-release` here with the
+# version and the exact digest. This workflow copies that digest to the public name — so
+# the package is created by and linked to THIS repository — cuts the Release with the
+# install artifacts, refuses to succeed unless the image can be pulled anonymously, and then
+# removes every older release and tag so only the current one is public.
+#
+# Secrets:
+#   GHCR_READ_TOKEN  — can read the private staging package. GITHUB_TOKEN cannot: a package
+#                      is readable only by the repository it is linked to.
+#   GITHUB_TOKEN     — writes the public package and the Release (permissions below).
+#
+# Re-run by hand with the workflow_dispatch inputs if a dispatch was missed.
+
+on:
+  repository_dispatch:
+    types: [publish-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, e.g. 0.2.0 (no leading v)'
+        required: true
+      digest:
+        description: 'Digest of the staging image, sha256:…'
+        required: true
+      prerelease:
+        description: 'Prerelease (does not move :latest)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.event.client_payload.version || github.event.inputs.version }}
+  cancel-in-progress: false
+
+env:
+  STAGING_IMAGE: ghcr.io/root-chain-ventures-llc/nabu-build
+  PUBLIC_IMAGE: ghcr.io/root-chain-ventures-llc/nabu
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and validate the inputs
+        id: in
+        env:
+          VERSION: ${{ github.event.client_payload.version || github.event.inputs.version }}
+          DIGEST: ${{ github.event.client_payload.digest || github.event.inputs.digest }}
+          PRERELEASE: ${{ github.event.client_payload.prerelease || github.event.inputs.prerelease || 'false' }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+            echo "::error::version '$VERSION' is not a plain semantic version (no leading v)"; exit 1
+          fi
+          if ! printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::digest '$DIGEST' is not sha256:<64 hex>"; exit 1
+          fi
+          case "$PRERELEASE" in true|false) ;; *) echo "::error::prerelease must be true or false"; exit 1 ;; esac
+          if [ -z "$GHCR_READ_TOKEN" ]; then
+            echo "::error::repository secret GHCR_READ_TOKEN is not set — cannot read the staging image"; exit 1
+          fi
+          {
+            echo "version=$VERSION"
+            echo "digest=$DIGEST"
+            echo "prerelease=$PRERELEASE"
+            echo "tag=v$VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing $VERSION from $STAGING_IMAGE@$DIGEST (prerelease=$PRERELEASE, source ${SOURCE_SHA:-unknown})"
+
+      - name: Install skopeo
+        run: |
+          set -euo pipefail
+          if ! command -v skopeo >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq skopeo
+          fi
+          skopeo --version
+
+      - name: Copy the image by digest to the public name
+        # Two credentials against one registry: the read token can see the private staging
+        # package, GITHUB_TOKEN owns the public one. --preserve-digests makes skopeo fail
+        # rather than rewrite the manifest, so what users pull is byte-for-byte what the
+        # private build produced.
+        env:
+          SRC_CREDS: x:${{ secrets.GHCR_READ_TOKEN }}
+          DST_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.in.outputs.version }}
+          DIGEST: ${{ steps.in.outputs.digest }}
+          PRERELEASE: ${{ steps.in.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          skopeo copy --all --preserve-digests \
+            --src-creds "$SRC_CREDS" --dest-creds "$DST_CREDS" \
+            "docker://$STAGING_IMAGE@$DIGEST" "docker://$PUBLIC_IMAGE:$VERSION"
+          # The other tags are copied from the public name just written (same digest).
+          skopeo copy --all --preserve-digests \
+            --src-creds "$DST_CREDS" --dest-creds "$DST_CREDS" \
+            "docker://$PUBLIC_IMAGE@$DIGEST" "docker://$PUBLIC_IMAGE:v$VERSION"
+          if [ "$PRERELEASE" = "false" ]; then
+            skopeo copy --all --preserve-digests \
+              --src-creds "$DST_CREDS" --dest-creds "$DST_CREDS" \
+              "docker://$PUBLIC_IMAGE@$DIGEST" "docker://$PUBLIC_IMAGE:latest"
+          fi
+
+      - name: Verify the image pulls anonymously and matches the digest
+        # This is the whole point of publishing from here. No credentials of any kind: if
+        # the package came out private, or the copy changed the digest, the release fails
+        # now instead of being discovered by the first user.
+        #
+        # A control image (a package that is known to be public) goes through the exact same
+        # calls first. If the control fails, the check itself is broken (network, registry
+        # change) and the error says so, instead of blaming the package.
+        env:
+          VERSION: ${{ steps.in.outputs.version }}
+          DIGEST: ${{ steps.in.outputs.digest }}
+          PRERELEASE: ${{ steps.in.outputs.prerelease }}
+          CONTROL_IMAGE: ghcr.io/actions/actions-runner
+          CONTROL_TAG: latest
+        run: |
+          set -euo pipefail
+          accept='application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json'
+          # anon_token <repository>: an anonymous pull token, empty when the registry refuses.
+          anon_token() {
+            curl -sS "https://ghcr.io/token?scope=repository:$1:pull&service=ghcr.io" \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true
+          }
+          # anon_digest <repository> <tag> <token>: the digest the registry reports, empty if none.
+          anon_digest() {
+            curl -sS -o /dev/null -D - -H "Authorization: Bearer $3" -H "Accept: $accept" \
+              "https://ghcr.io/v2/$1/manifests/$2" \
+              | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}'
+          }
+
+          control_repo="${CONTROL_IMAGE#ghcr.io/}"
+          ctoken=$(anon_token "$control_repo")
+          cgot=""
+          [ -z "$ctoken" ] || cgot=$(anon_digest "$control_repo" "$CONTROL_TAG" "$ctoken")
+          if [ -z "$cgot" ]; then
+            echo "::error::the control image $CONTROL_IMAGE:$CONTROL_TAG could not be read anonymously: the check itself is not working, so the result for the Nabu image would mean nothing. Re-run later."
+            exit 1
+          fi
+          echo "control $CONTROL_IMAGE:$CONTROL_TAG -> $cgot (anonymous read works)"
+
+          repo="${PUBLIC_IMAGE#ghcr.io/}"
+          token=$(anon_token "$repo")
+          if [ -z "$token" ]; then
+            echo "::error::anonymous registry token request for $PUBLIC_IMAGE was refused, although the control image works: the package is not public."
+            echo "::error::Fix: github.com/orgs/Root-Chain-Ventures-LLC/packages/container/package/nabu -> Package settings -> Change visibility -> Public, then re-run this workflow."
+            exit 1
+          fi
+          check() {
+            got=$(anon_digest "$repo" "$1" "$token")
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::$PUBLIC_IMAGE:$1 resolves to '${got:-nothing}' anonymously, expected $DIGEST"
+              exit 1
+            fi
+            echo "$PUBLIC_IMAGE:$1 -> $got (anonymous, matches)"
+          }
+          check "$VERSION"
+          check "v$VERSION"
+          if [ "$PRERELEASE" = "false" ]; then
+            check latest
+          fi
+
+      - name: Assemble the install artifacts
+        env:
+          VERSION: ${{ steps.in.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Public releases carry no notes: the title is the version and the assets are the
+          # install artifacts.
+          mkdir -p dist
+          cp docker-compose.yml install.sh dist/
+          tar -czf "dist/deploy-k8s-$VERSION.tar.gz" deploy/k8s
+          ls -l dist
+
+      - name: Cut the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.in.outputs.tag }}
+          VERSION: ${{ steps.in.outputs.version }}
+          PRERELEASE: ${{ steps.in.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$VERSION" --notes "" ${flags[@]+"${flags[@]}"}
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --target "$GITHUB_SHA" \
+              --title "$VERSION" \
+              --notes "" \
+              ${flags[@]+"${flags[@]}"}
+          fi
+          echo "Released $TAG: $(gh release view "$TAG" --json url -q .url)"
+
+      # Only the current release stays public: once a stable release is out, delete every other
+      # release and tag in this repository. Skipped for a prerelease, and skipped when a newer
+      # version tag already exists (a backfill of an old version must never remove the newest).
+      - name: Remove older releases and tags
+        if: steps.in.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.in.outputs.tag }}
+        run: |
+          set -euo pipefail
+          newest=$(gh api --paginate "repos/$GITHUB_REPOSITORY/tags?per_page=100" --jq '.[].name' \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n 1)
+          if [ "$newest" != "$TAG" ]; then
+            echo "::warning::$TAG is not the newest version tag (${newest:-none}); leaving older releases in place"
+            exit 0
+          fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | "\(.id) \(.tag_name)"' \
+            | while read -r id tag; do
+                [ "$tag" = "$TAG" ] && continue
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+                echo "deleted release $tag"
+              done
+          gh api --paginate "repos/$GITHUB_REPOSITORY/tags?per_page=100" --jq '.[].name' \
+            | while read -r tag; do
+                [ "$tag" = "$TAG" ] && continue
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+                echo "deleted tag $tag"
+              done

@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nabu
+  labels:
+    app.kubernetes.io/name: nabu
+  annotations:
+    # The pod only ever speaks plain HTTP, so there is no backend-protocol override. This
+    # ingress is where TLS is terminated (cert-manager annotation below, or your own equivalent).
+    #
+    # Uploads are the largest request bodies: keep this above MAX_UPLOAD_MB (100 by default) plus
+    # a little for the multipart framing, or the ingress rejects a large file before Nabu sees it.
+    nginx.ingress.kubernetes.io/proxy-body-size: "110m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [nabu.example.com]
+      secretName: nabu-tls
+  rules:
+    - host: nabu.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nabu
+                port:
+                  name: http

@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nabu
+  labels:
+    app.kubernetes.io/name: nabu
+data:
+  # The public https:// URL people reach Nabu at. The app itself never terminates TLS or
+  # redirects: this value decides whether session cookies get the Secure flag, whether the CSP
+  # sends HSTS / upgrade-insecure-requests, and which Origin the CSRF check accepts on every
+  # state-changing request. It must match what the browser shows exactly (scheme, host, port).
+  # In production the app refuses to start when it is not https://.
+  BASE_URL: "https://nabu.example.com"
+
+  # The ingress in front of the pod terminates TLS and talks plain HTTP to it (see
+  # ingress.yaml), so the app must trust the ingress's X-Forwarded-* headers. "1" trusts exactly
+  # one proxy hop (the ingress controller), so a client cannot spoof its address with its own
+  # X-Forwarded-For. Use "2" if a cloud load balancer sits in front of the ingress controller, or
+  # a comma-separated list of the ingress/LB CIDRs. "true" trusts every hop (avoid). Leave it
+  # unset or "false" only when no reverse proxy sits in front of the pod at all.
+  TRUST_PROXY: "1"
+
+  # Files (uploads, renditions) live here, on the PVC.
+  DATA_DIR: "/data"
+
+  # Largest single upload in megabytes. Keep the ingress's proxy-body-size above it.
+  MAX_UPLOAD_MB: "100"

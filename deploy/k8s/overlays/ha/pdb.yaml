@@ -1,0 +1,17 @@
+# New resource (base has none: a PodDisruptionBudget on a single-replica Deployment would only
+# ever block its one pod from draining). `minAvailable: 1` of 2 replicas means a voluntary
+# disruption (node drain, cluster-autoscaler scale-down) can take at most one pod at a time;
+# Kubernetes blocks an eviction that would leave none. Raise it together with `replicas`. It does
+# not protect against a node dying outright; the preferred anti-affinity in deployment-ha.yaml
+# does, by keeping the pods off the same node where the cluster allows.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nabu
+  labels:
+    app.kubernetes.io/name: nabu
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nabu

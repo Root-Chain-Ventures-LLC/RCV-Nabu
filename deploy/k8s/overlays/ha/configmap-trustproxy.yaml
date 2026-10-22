@@ -1,0 +1,13 @@
+# Strategic-merge patch over base/configmap.yaml. The base already ships TRUST_PROXY: "1" (a hop
+# count: trust exactly the ingress), so this is a no-op value change kept here, explicit, because
+# with several replicas the stakes are different: every pod must trust X-Forwarded-* from your
+# ingress / load balancer specifically, not from a peer pod or any other hop. Do not put a second
+# internal proxy between the ingress and the Service; it could inject its own forwarded headers
+# ahead of the real ones. Raise it to "2" if a cloud load balancer sits in front of the ingress
+# controller, or use a comma-separated CIDR list of the ingress/LB addresses.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nabu
+data:
+  TRUST_PROXY: "1"
