@@ -168,5 +168,5 @@ if [ "$generated_key" = 1 ]; then
   warn "unrecoverable."
 fi
 echo
-say "Nabu speaks plain HTTP. Put a reverse proxy that terminates TLS in front of it, and set"
-say "TRUST_PROXY in .env (keep NABU_BIND=127.0.0.1 if the proxy runs on this host)."
+say "Nabu serves plain HTTP unless TLS_CERT_FILE is set. Put a reverse proxy that terminates TLS in front"
+say "of it, and set TRUST_PROXY in .env (keep NABU_BIND=127.0.0.1 if the proxy runs on this host)."

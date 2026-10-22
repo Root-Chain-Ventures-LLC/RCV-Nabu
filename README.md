@@ -122,6 +122,10 @@ Copy `.env.example` and read the comments: every variable is documented there. T
 - **Files at rest** are always encrypted with keys derived from `NABU_SECRET_KEY`. To rotate the
   key, put the new one in `NABU_SECRET_KEY` and the old one in `NABU_SECRET_KEY_PREVIOUS`; stored
   files and secrets are re-encrypted in the background. Keep the old key until that is done.
+- **Interactive HTML documents** are off by default. An administrator can switch them on per space;
+  they then play inside a sandboxed frame with no network access and no access to Nabu. For defence
+  in depth set `LIVE_HTML_ORIGIN` to a separate https hostname routed to the same app, so the frame
+  runs on an origin that holds no session. Leave the feature off where editors are not trusted to publish.
 - **Secrets.** Back up `NABU_SECRET_KEY` separately from the database and volume backups: without
   it the stored files and saved credentials cannot be read.
 
