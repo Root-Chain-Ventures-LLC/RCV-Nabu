@@ -7,9 +7,11 @@
 --   psql "$POSTGRES_ADMIN_URL" -v db_password='<a strong, generated password>' \
 --     -f deploy/k8s/create-db.sql
 --
--- Requirements: PostgreSQL 14 or newer with the pgvector extension installed on the server
--- (package `postgresql-17-pgvector` or similar, or the `pgvector/pgvector` image), plus
--- pg_trgm, which ships with PostgreSQL's contrib package. The compose path runs 17.
+-- Requirements: PostgreSQL 14 or newer with pg_trgm, which ships with PostgreSQL's contrib package.
+-- pgvector (package `postgresql-17-pgvector` or similar, or the `pgvector/pgvector` image) is
+-- optional: it powers semantic and hybrid search. Without it Nabu runs with keyword search, and Ask
+-- looks sources up by keyword; install it later and restart Nabu to turn semantic search on.
+-- The compose path runs 17 with pgvector.
 --
 -- Why the extensions are created here: CREATE EXTENSION needs privileges the application role
 -- should not have (pgvector is not a "trusted" extension). Nabu's migrations run
@@ -23,8 +25,10 @@ CREATE DATABASE nabu OWNER nabu;
 
 \connect nabu
 
-CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+-- Optional: created only when the server has pgvector installed.
+SELECT 'CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public'
+WHERE EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') \gexec
 
 -- Nabu's migrations create every table inside the public schema of this database, as this role
 -- (the database owner), so no further GRANTs are needed.

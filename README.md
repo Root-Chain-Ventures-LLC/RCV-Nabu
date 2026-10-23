@@ -24,8 +24,8 @@ parties as a hosted, managed, or SaaS service. See [`LICENSE`](LICENSE). Commerc
 - **Docker** path (single host): Docker Engine and Docker Compose **2.24 or newer**. The compose
   file runs its own PostgreSQL 17 with pgvector. About 4 GB of RAM is a comfortable minimum (the
   app container is limited to 3 GB by default).
-- **Kubernetes** path: a cluster, a PostgreSQL server (14 or newer, with the `vector` and `pg_trgm`
-  extensions) you already run, an ingress controller that terminates TLS, and a volume.
+- **Kubernetes** path: a cluster, a PostgreSQL server (14 or newer, with `pg_trgm`; `vector` (pgvector)
+  is optional and powers semantic search) you already run, an ingress controller that terminates TLS, and a volume.
 - A DNS name and a TLS certificate, normally on a **reverse proxy or ingress** in front of Nabu.
   The app can also serve HTTPS itself (see "Securing a deployment").
 
