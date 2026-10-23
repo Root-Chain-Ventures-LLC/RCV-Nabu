@@ -7,10 +7,8 @@ name: publish
 # install artifacts, refuses to succeed unless the image can be pulled anonymously, and then
 # removes every older release and tag so only the current one is public.
 #
-# Secrets:
-#   GHCR_READ_TOKEN  — can read the private staging package. GITHUB_TOKEN cannot: a package
-#                      is readable only by the repository it is linked to.
-#   GITHUB_TOKEN     — writes the public package and the Release (permissions below).
+# No secrets: the workflow's own GITHUB_TOKEN reads the private staging package (the package grants
+# this repository read access), writes the public package and cuts the Release (permissions below).
 #
 # Re-run by hand with the workflow_dispatch inputs if a dispatch was missed.
 
@@ -57,7 +55,6 @@ jobs:
           DIGEST: ${{ github.event.client_payload.digest || github.event.inputs.digest }}
           PRERELEASE: ${{ github.event.client_payload.prerelease || github.event.inputs.prerelease || 'false' }}
           SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
@@ -67,9 +64,6 @@ jobs:
             echo "::error::digest '$DIGEST' is not sha256:<64 hex>"; exit 1
           fi
           case "$PRERELEASE" in true|false) ;; *) echo "::error::prerelease must be true or false"; exit 1 ;; esac
-          if [ -z "$GHCR_READ_TOKEN" ]; then
-            echo "::error::repository secret GHCR_READ_TOKEN is not set — cannot read the staging image"; exit 1
-          fi
           {
             echo "version=$VERSION"
             echo "digest=$DIGEST"
@@ -88,12 +82,12 @@ jobs:
           skopeo --version
 
       - name: Copy the image by digest to the public name
-        # Two credentials against one registry: the read token can see the private staging
-        # package, GITHUB_TOKEN owns the public one. --preserve-digests makes skopeo fail
+        # GITHUB_TOKEN reads the private staging package (granted to this repository) and owns the
+        # public one. --preserve-digests makes skopeo fail
         # rather than rewrite the manifest, so what users pull is byte-for-byte what the
         # private build produced.
         env:
-          SRC_CREDS: x:${{ secrets.GHCR_READ_TOKEN }}
+          SRC_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
           DST_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.in.outputs.version }}
           DIGEST: ${{ steps.in.outputs.digest }}
