@@ -126,6 +126,12 @@ Copy `.env.example` and read the comments: every variable is documented there. T
   they then play inside a sandboxed frame with no network access and no access to Nabu. For defence
   in depth set `LIVE_HTML_ORIGIN` to a separate https hostname routed to the same app, so the frame
   runs on an origin that holds no session. Leave the feature off where editors are not trusted to publish.
+- **Microsoft 365 directory (optional).** Settings, Microsoft 365 directory reads people, departments and managers from
+  Microsoft Entra ID through Microsoft Graph and keeps teams, supervisors and team spaces in step. Register an
+  application, add the **application** permissions `User.Read.All` and `GroupMember.Read.All` (Microsoft Graph), grant admin
+  consent, and enter the tenant ID, client ID and client secret in Settings. Nabu only reads from the directory. People who
+  leave the sync group are disabled, never deleted. Other identity providers can supply a department and a manager as sign-in
+  claims instead (Settings, Sign-in); those claims are trusted as the provider sends them, so keep the attributes under the provider's own access control.
 - **Secrets.** Back up `NABU_SECRET_KEY` separately from the database and volume backups: without
   it the stored files and saved credentials cannot be read.
 
