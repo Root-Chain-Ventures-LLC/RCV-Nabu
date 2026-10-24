@@ -16,6 +16,9 @@ upgrades and sizing notes are in [`../../README.md`](../../README.md).
 Pick one of `base/` or `overlays/ha/` per namespace: the overlay builds `base/` in, it does not sit
 alongside it.
 
+A namespace shared with other applications is supported: the pods set `enableServiceLinks: false`, so a Service in
+the namespace named `api` or `nabu` cannot inject `API_PORT` or `NABU_PORT`-style variables into the containers.
+
 ### What `base/` deploys
 
 A Deployment with one replica (non-root, `readOnlyRootFilesystem`, all capabilities dropped, a

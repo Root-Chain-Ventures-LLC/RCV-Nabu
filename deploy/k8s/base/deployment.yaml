@@ -34,6 +34,11 @@ spec:
       # The app never talks to the Kubernetes API, so it gets no service-account token: a
       # compromised process has no credential to the cluster to steal.
       automountServiceAccountToken: false
+      # No service-link environment variables. Without this the kubelet injects `<SERVICE>_PORT`,
+      # `<SERVICE>_SERVICE_HOST`, ... for every Service in the namespace, so a Service named `nabu`
+      # would write into the app's own `NABU_*` settings. Nothing here reads them (the database comes
+      # from DATABASE_URL), and it keeps the app safe in a namespace shared with other workloads.
+      enableServiceLinks: false
       # Give a running parse time to hand its job back to the queue on shutdown.
       terminationGracePeriodSeconds: 45
       containers:

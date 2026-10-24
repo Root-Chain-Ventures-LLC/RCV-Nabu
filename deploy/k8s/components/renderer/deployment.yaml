@@ -23,6 +23,10 @@ spec:
       # The renderer opens untrusted documents. It does not need the internet to do its job; the
       # NetworkPolicy in this component denies all egress. Do not give it a route out.
       automountServiceAccountToken: false
+      # No service-link environment variables. In a namespace that also has a Service named `api`,
+      # the kubelet would set API_PORT=tcp://<ip>:<port>, which Gotenberg reads as its own `--api-port`
+      # flag and exits on. The renderer is reached through RENDERER_URL, not service links.
+      enableServiceLinks: false
       containers:
         - name: renderer
           # Pinned to the same release as docker-compose.yml. The image runs as uid/gid 1001 with HOME
