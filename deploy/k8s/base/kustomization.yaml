@@ -22,7 +22,7 @@ resources:
 images:
   - name: nabu
     newName: ghcr.io/root-chain-ventures-llc/nabu
-    newTag: "0.5.1"
+    newTag: "0.6.0"
 
 labels:
   - pairs:
